@@ -126,8 +126,9 @@ func main() {
 
 	getDefault(logLevel)
 
-	startSerial(iotConfig.SerialPorts, 0)
-	startSerial(iotConfig.SerialPorts, 1)
+	initSerials()
+	// startSerial(&IotSerials[0], iotConfig.SerialPorts)
+	// startSerial(&IotSerials[1], iotConfig.SerialPorts)
 
 	if iotConfig.Local {
 		// fmt.Println("NO SCHEDULER, NO REFRESHER, NO VERWARMING !!!")
@@ -141,12 +142,7 @@ func main() {
 
 			nextWatchDog = time.Now().Unix() + 7
 
-			if serialStatus[0] == "stop" {
-				startSerial(iotConfig.SerialPorts, 0)
-			}
-			if serialStatus[1] == "stop" {
-				startSerial(iotConfig.SerialPorts, 1)
-			}
+			checkSerials()
 
 			err = iot.DatabaseNew.Ping()
 			if err != nil {

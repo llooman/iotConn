@@ -19,86 +19,129 @@ import (
 )
 
 var serialStatus [2]string
+var debugSerial bool
 
-type iotSerial struct {
+type IotSerial struct {
+	index        int
 	name         string
 	serialPort   *serial.Port
 	subscription string
 	status       string
+	retry        int
 }
 
-var iotSerials [2]iotSerial
+// IotSerials ...
+var IotSerials [2]IotSerial
 
-func startSerial(serialPorts []string, index int) {
+func initSerials() {
 
-	serialPort, portName, err := scanPorts(serialPorts)
-	if err != nil {
-		iot.Err.Printf("Serial scanPorts:%s", err.Error())
-		return
+	// debugSerial = true
+	IotSerials[0].status = "idle"
+	IotSerials[0].index = 1
+
+	IotSerials[1].status = "idle"
+	IotSerials[1].index = 2
+}
+
+func checkSerials() {
+
+	if IotSerials[0].status == "stop" ||
+		IotSerials[0].status == "idle" {
+
+		startSerial(&IotSerials[0], iotConfig.SerialPorts)
+
 	}
 
-	go serialHandler(serialPort, portName, index)
+	if IotSerials[1].status == "stop" ||
+		IotSerials[1].status == "idle" {
+
+		startSerial(&IotSerials[1], iotConfig.SerialPorts)
+	}
 }
 
-func scanPorts(serialPorts []string) (*serial.Port, string, error) {
+func startSerial(iotSerial *IotSerial, serialPorts []string) {
 
-	var serialPort *serial.Port
+	if debugSerial {
+		iot.Info.Printf("startSerial %d", iotSerial.index)
+	}
+
+	scanPorts(iotSerial, serialPorts)
+
+	if iotSerial.status == "connected" {
+		go serialHandler(iotSerial)
+	}
+}
+
+func portInUse(portName string) bool {
+
+	for _, iotSerial := range IotSerials {
+
+		if portName == iotSerial.name &&
+			iotSerial.status == "connected" {
+
+			return true
+		}
+	}
+	return false
+}
+
+func scanPorts(iotSerial *IotSerial, serialPorts []string) {
+
 	var err error
 
 	for _, portName := range serialPorts {
 
-		comPort := &serial.Config{Name: portName, Baud: 115200}
-		serialPort, err = serial.OpenPort(comPort)
+		if portInUse(portName) {
 
-		if err == nil {
-			return serialPort, portName, err
+			iot.Info.Printf("scanPorts.inUse %s", portName)
+
+		} else {
+
+			if debugSerial {
+				iot.Info.Printf("scanPorts.OpenPort %s", portName)
+			}
+			comPort := &serial.Config{Name: portName, Baud: 115200}
+			iotSerial.serialPort, err = serial.OpenPort(comPort)
+
+			if err == nil {
+				iotSerial.name = portName
+				iotSerial.status = "connected"
+				iot.Info.Printf("scanPorts.connected %s", portName)
+				return
+			}
 		}
-
-		// fmt.Printf("Serial skip %s err:%s\n", portName, err.Error())
 	}
 
-	return serialPort, "noPortAvailable", err
+	iotSerial.status = "idle"
 }
 
-func serialHandler(serialPort *serial.Port, portName string, index int) {
+func serialHandler(iotSerial *IotSerial) {
 
-	iot.Info.Printf("Serial start %s", portName)
+	iot.Info.Printf("SerialHandler %d %s", iotSerial.index, iotSerial.name)
 
-	defer serialPort.Close()
+	defer iotSerial.serialPort.Close()
+
+	subscription := ""
 
 	var connID int
 	var payload string
 	var iotPayload iot.IotPayload
-	// var svcLoop = "startServiceLoop"
-	serialStatus[index] = "running"
-
-	// mqClientID := fmt.Sprintf("%s%s", iotConfig.ServerId, portName)
-
-	// if iot.LogCode("s") {
-	// 	iot.Info.Printf("isvc.new clnt: %s\n", mqClientID)
-	// }
-
-	// mqClient := iot.NewMQClient(iotConfig.MqClient, mqClientID)
-	subscription := ""
-
-	//mqSubscribe(mqClient, topic, conn, subscription)
-	// var n int
 	var open bool
 	var i int
 	var j int
 	var readBuf = make([]byte, 128)
 	var writeBuf = make([]byte, 128)
 
-	for serialStatus[index] != "stop" {
+	for iotSerial.status != "stop" {
 
-		n, err := serialPort.Read(readBuf)
+		n, err := iotSerial.serialPort.Read(readBuf)
 
 		if err != nil {
-			iot.Err.Printf("Serial %s:%s", portName, err.Error())
-			serialStatus[index] = "stop"
-			// subscribeDownQueueForSerial("", serialPort, subscription)
+
+			iot.Err.Printf("Serial %s:%s", iotSerial.name, err.Error())
+			iotSerial.status = "stop"
 			if token := mqttClient.Unsubscribe(subscription); token.Wait() && token.Error() != nil {
-				iot.Err.Printf("Failed mqtt.Unsubscribe %s:%s", subscription, token.Error())
+				iot.Err.Printf("mqtt.Unsubscribe %s:%s", subscription, token.Error())
 			}
 			continue
 		}
@@ -118,8 +161,7 @@ func serialHandler(serialPort *serial.Port, portName string, index int) {
 					connID != iotPayload.ConnId {
 
 					topic := fmt.Sprintf("%s%d", iotConfig.MqttDown, iotPayload.ConnId)
-					// err := subscribeDownQueueForSerial(mqClient, topic, serialPort, subscription)
-					err := subscribeDownQueueForSerial(topic, serialPort, subscription)
+					err := subscribeDownQueueForSerial(topic, iotSerial.serialPort, subscription)
 					if err != nil {
 
 						iot.Err.Println(err.Error())
@@ -128,11 +170,12 @@ func serialHandler(serialPort *serial.Port, portName string, index int) {
 					} else {
 
 						subscription = topic
+						iot.Info.Printf("SerialSubscribe %d %s", iotSerial.index, subscription)
 						connID = iotPayload.ConnId
 					}
 				}
 
-				if iot.LogPayload(&iotPayload) {
+				if iot.LogPayload(&iotPayload) || debugSerial {
 
 					iot.Info.Printf("{%s}\n", payload)
 				}
@@ -158,7 +201,6 @@ func serialHandler(serialPort *serial.Port, portName string, index int) {
 	}
 }
 
-// func subscribeDownQueueForSerial(client mqtt.Client, topic string, serialPort *serial.Port, prevTopic string) error {
 func subscribeDownQueueForSerial(topic string, serialPort *serial.Port, prevTopic string) error {
 
 	if topic == prevTopic {
@@ -167,9 +209,7 @@ func subscribeDownQueueForSerial(topic string, serialPort *serial.Port, prevTopi
 
 	if len(prevTopic) > 0 {
 		if token := mqttClient.Unsubscribe(prevTopic); token.Wait() && token.Error() != nil {
-			iot.Err.Println(token.Error())
 			return token.Error()
-			// os.Exit(1)
 		}
 	}
 
@@ -183,7 +223,7 @@ func subscribeDownQueueForSerial(topic string, serialPort *serial.Port, prevTopi
 		payload := string(msg.Payload())
 		iotPayload := iot.ToPayload(payload)
 
-		if iot.LogPayload(&iotPayload) {
+		if iot.LogPayload(&iotPayload) || debugSerial {
 			iot.Info.Printf("mq.received [%s] %s\n", topic, payload)
 		}
 
@@ -193,12 +233,6 @@ func subscribeDownQueueForSerial(topic string, serialPort *serial.Port, prevTopi
 		}
 
 	})
-
-	if token.Error() != nil {
-		iot.Err.Printf("Serial.Subscribe.err %s:topic[%s]\n", token.Error(), topic)
-	} else {
-		iot.Info.Printf("Serial.subscribe [%s]", topic)
-	}
 
 	return token.Error()
 }
