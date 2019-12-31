@@ -1,6 +1,7 @@
 /*   xxxx  xxxx
 Connector 2.0
-
+go get [-d] [-f] [-t] [-u] [-v] [-fix] [-insecure] [build flags] [packages]
+go get -v github.com/tarm/serial
 */
 
 package main
@@ -15,6 +16,7 @@ import (
 	"strconv"
 
 	"iot"
+
 	// "iot/svc/verw"
 
 	// "path"
@@ -31,11 +33,13 @@ import (
 )
 
 type IotConfig struct {
-	Port   string
-	MqttUp string
-
+	Port     string
 	MqClient string
-	MqID     string
+	MqttUp   string
+	MqttDown string
+
+	SerialPorts []string
+
 	Database string
 
 	Debug   bool
@@ -104,7 +108,8 @@ func main() {
 	logLevel = iot.GetNodeProp(meNode, 10)
 	mePing = iot.GetNodeProp(meNode, 5)
 
-	mqttClient = iot.NewMQClient(iotConfig.MqClient, iotConfig.MqID)
+	mgttClientID := iotConfig.ServerId + "icon"
+	mqttClient = iot.NewMQClient(iotConfig.MqClient, mgttClientID)
 
 	service := "0.0.0.0:" + iotConfig.Port
 	if runtime.GOOS == "windows" {
@@ -119,15 +124,10 @@ func main() {
 
 	var nextWatchDog int64
 
-	// pingLoad := "{U,1,5,1}"
-	// iotPing := iot.ToPayload(pingLoad)
-
-	// logLevelLoad := "{R,1,10,1}"
-	// iotLogLevel := iot.ToPayload(pingLoad)
-
-	// forwardUp(logLevelLoad, &iotLogLevel)
-
 	getDefault(logLevel)
+
+	startSerial(iotConfig.SerialPorts, 0)
+	startSerial(iotConfig.SerialPorts, 1)
 
 	if iotConfig.Local {
 		// fmt.Println("NO SCHEDULER, NO REFRESHER, NO VERWARMING !!!")
@@ -140,6 +140,13 @@ func main() {
 				time.Now().Second()%10 == 0) {
 
 			nextWatchDog = time.Now().Unix() + 7
+
+			if serialStatus[0] == "stop" {
+				startSerial(iotConfig.SerialPorts, 0)
+			}
+			if serialStatus[1] == "stop" {
+				startSerial(iotConfig.SerialPorts, 1)
+			}
 
 			err = iot.DatabaseNew.Ping()
 			if err != nil {
